@@ -51,4 +51,8 @@
     <string name="overlay_no_model">Download a Whisper model first</string>
     <string name="overlay_copied">No text field found – copied to clipboard</string>
     <string name="overlay_enable">Floating mic button:</string>
+    <string name="custom_vocabulary_button">Custom words…</string>
+    <string name="custom_vocabulary_title">Custom words</string>
+    <string name="custom_vocabulary_help">One entry per line.\n• A word or name (e.g. Elena): words that sound alike are corrected to it (Helena → Elena).\n• wrong = right (e.g. cloud code = Claude Code): explicit replacement.</string>
+    <string name="custom_vocabulary_reset">Reset</string>
 </resources>

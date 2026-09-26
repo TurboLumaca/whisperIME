@@ -43,6 +43,7 @@ import com.google.android.material.floatingactionbutton.FloatingActionButton;
 import com.whispertflite.asr.Recorder;
 import com.whispertflite.asr.Whisper;
 import com.whispertflite.asr.WhisperResult;
+import com.whispertflite.utils.CustomVocabulary;
 import com.whispertflite.utils.HapticFeedback;
 import com.whispertflite.utils.InputLang;
 import com.whispertflite.utils.LanguagePairAdapter;
@@ -169,6 +170,8 @@ public class MainActivity extends AppCompatActivity {
             modeOverlay.setChecked(isOverlayServiceEnabled());
             startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
         });
+
+        findViewById(R.id.btnCustomVocabulary).setOnClickListener(v -> showCustomVocabularyDialog());
 
         btnInfo = findViewById(R.id.btnInfo);
         btnInfo.setOnClickListener(view -> startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/woheller69/whisperIME#Donate"))));
@@ -340,6 +343,28 @@ public class MainActivity extends AppCompatActivity {
         // Assume this Activity is the current activity, check record permission
         checkPermissions();
 
+    }
+
+    private void showCustomVocabularyDialog() {
+        EditText input = new EditText(this);
+        input.setText(CustomVocabulary.getVocabulary(this));
+        input.setMinLines(6);
+        input.setGravity(android.view.Gravity.TOP | android.view.Gravity.START);
+        input.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
+                | android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        int pad = Math.round(20 * getResources().getDisplayMetrics().density);
+        LinearLayout container = new LinearLayout(this);
+        container.setPadding(pad, 0, pad, 0);
+        container.addView(input, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        new androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle(R.string.custom_vocabulary_title)
+                .setMessage(R.string.custom_vocabulary_help)
+                .setView(container)
+                .setPositiveButton(android.R.string.ok, (d, w) -> CustomVocabulary.setVocabulary(this, input.getText().toString()))
+                .setNeutralButton(R.string.custom_vocabulary_reset, (d, w) -> CustomVocabulary.setVocabulary(this, CustomVocabulary.DEFAULT_VOCABULARY))
+                .setNegativeButton(android.R.string.cancel, null)
+                .show();
     }
 
     @Override

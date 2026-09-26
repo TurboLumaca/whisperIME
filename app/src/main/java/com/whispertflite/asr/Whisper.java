@@ -5,6 +5,7 @@ import android.util.Log;
 
 import com.whispertflite.engine.WhisperEngine;
 import com.whispertflite.engine.WhisperEngineJava;
+import com.whispertflite.utils.CustomVocabulary;
 
 import java.io.File;
 import java.io.IOException;
@@ -35,6 +36,7 @@ public class Whisper {
     private final AtomicBoolean mInProgress = new AtomicBoolean(false);
 
     private final WhisperEngine mWhisperEngine;
+    private final Context mContext;
     private Action mAction;
     private int mLangToken = -1;
     private WhisperListener mUpdateListener;
@@ -44,6 +46,7 @@ public class Whisper {
     private volatile boolean taskAvailable = false;
 
     public Whisper(Context context) {
+        this.mContext = context.getApplicationContext() != null ? context.getApplicationContext() : context;
         this.mWhisperEngine = new WhisperEngineJava(context);
 
         // Start thread for RecordBuffer transcription
@@ -136,6 +139,9 @@ public class Whisper {
                 synchronized (mWhisperEngine) {
                     whisperResult = mWhisperEngine.processRecordBuffer(mAction, mLangToken);
                 }
+                // Fix names and terms from the user's custom vocabulary
+                whisperResult = new WhisperResult(CustomVocabulary.apply(mContext, whisperResult.getResult()),
+                        whisperResult.getLanguage(), whisperResult.getTask());
                 sendResult(whisperResult);
 
                 long timeTaken = System.currentTimeMillis() - startTime;

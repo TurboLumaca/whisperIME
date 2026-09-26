@@ -50,4 +50,8 @@
     <string name="overlay_no_model">Scarica prima un modello Whisper</string>
     <string name="overlay_copied">Nessun campo di testo trovato – copiato negli appunti</string>
     <string name="overlay_enable">Microfono flottante:</string>
+    <string name="custom_vocabulary_button">Parole personalizzate…</string>
+    <string name="custom_vocabulary_title">Parole personalizzate</string>
+    <string name="custom_vocabulary_help">Una voce per riga.\n• Una parola o un nome (es. Elena): le parole simili nel suono vengono corrette (Helena → Elena).\n• sbagliato = giusto (es. cloud code = Claude Code): sostituzione esplicita.</string>
+    <string name="custom_vocabulary_reset">Ripristina</string>
 </resources>
