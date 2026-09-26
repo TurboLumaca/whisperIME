@@ -30,6 +30,9 @@ public class Recorder {
 
     public interface RecorderListener {
         void onUpdateReceived(String message);
+
+        // Normalized input level 0..1, called for every audio frame while recording
+        default void onAmplitudeReceived(float level) {}
     }
 
     private static final String TAG = "Recorder";
@@ -38,6 +41,9 @@ public class Recorder {
     public static final String MSG_RECORDING = "Recording...";
     public static final String MSG_RECORDING_DONE = "Recording done...!";
     public static final String MSG_RECORDING_ERROR = "Recording error...";
+    // Longer recordings are split into 30s chunks by the engine
+    public static final int MAX_RECORDING_SECONDS = 300;
+    public static final long MAX_RECORDING_MS = MAX_RECORDING_SECONDS * 1000L;
 
     private final Context mContext;
     private final AtomicBoolean mInProgress = new AtomicBoolean(false);
@@ -47,6 +53,7 @@ public class Recorder {
     private final Condition hasTask = lock.newCondition();
     // Used by stop() to wait until recordAudio() finishes and notifies here
     private final Object fileSavedLock = new Object();
+    private boolean recordingDone = true;  // guarded by fileSavedLock
 
     private volatile boolean shouldStartRecording = false;
     private boolean useVAD = false;
@@ -76,6 +83,9 @@ public class Recorder {
         lock.lock();
         try {
             Log.d(TAG, "Recording starts now");
+            synchronized (fileSavedLock) {
+                recordingDone = false;
+            }
             shouldStartRecording = true;
             hasTask.signal();
         } finally {
@@ -100,12 +110,18 @@ public class Recorder {
         Log.d(TAG, "Recording stopped");
         mInProgress.set(false);
 
-        // Wait for the recording thread to finish
+        // Wait for the recording thread to finish (it may already have finished, e.g. max length reached)
         synchronized (fileSavedLock) {
-            try {
-                fileSavedLock.wait(); // Wait until notified by the recording thread
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt(); // Restore interrupted status
+            long deadline = System.currentTimeMillis() + 3000;
+            while (!recordingDone) {
+                long remaining = deadline - System.currentTimeMillis();
+                if (remaining <= 0) break;
+                try {
+                    fileSavedLock.wait(remaining); // Wait until notified by the recording thread
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt(); // Restore interrupted status
+                    break;
+                }
             }
         }
     }
@@ -143,6 +159,10 @@ public class Recorder {
                 sendUpdate(e.getMessage());
             } finally {
                 mInProgress.set(false);
+                synchronized (fileSavedLock) {
+                    recordingDone = true;
+                    fileSavedLock.notifyAll();
+                }
             }
         }
     }
@@ -180,10 +200,10 @@ public class Recorder {
         AudioRecord audioRecord = builder.build();
         audioRecord.startRecording();
 
-        // Calculate maximum byte counts for 30 seconds (for saving)
-        int bytesForThirtySeconds = sampleRateInHz * bytesPerSample * channels * 30;
+        // Calculate maximum byte count for the maximum recording length
+        int maxBytes = sampleRateInHz * bytesPerSample * channels * MAX_RECORDING_SECONDS;
 
-        ByteArrayOutputStream outputBuffer = new ByteArrayOutputStream(); // Output buffer; truncated to 30s before passing to RecordBuffer
+        ByteArrayOutputStream outputBuffer = new ByteArrayOutputStream(); // Output buffer; truncated to maxBytes before passing to RecordBuffer
 
         byte[] audioData = new byte[bufferSize];
         int totalBytesRead = 0;
@@ -192,21 +212,21 @@ public class Recorder {
         boolean isRecording = false;
         byte[] vadAudioBuffer = new byte[VAD_FRAME_SIZE * 2];  // One frame at 16-bit (480 samples × 2 bytes)
 
-        while (mInProgress.get() && totalBytesRead < bytesForThirtySeconds) { // Save all bytes read up to 30 seconds
+        while (mInProgress.get() && totalBytesRead < maxBytes) { // Save all bytes read up to maxBytes
             int bytesRead = audioRecord.read(audioData, 0, VAD_FRAME_SIZE * 2);
             if (bytesRead > 0) {
                 outputBuffer.write(audioData, 0, bytesRead);
                 totalBytesRead += bytesRead;
+                if (mListener != null) mListener.onAmplitudeReceived(computeLevel(audioData, bytesRead));
             } else {
                 Log.d(TAG, "AudioRecord error, bytes read: " + bytesRead);
                 break;
             }
 
             if (useVAD){
-                byte[] outputBufferByteArray = outputBuffer.toByteArray();
-                if (outputBufferByteArray.length >= VAD_FRAME_SIZE * 2) {
-                    // Always use the last VAD_FRAME_SIZE * 2 bytes (16 bit) from outputBuffer for VAD
-                    System.arraycopy(outputBufferByteArray, outputBufferByteArray.length - VAD_FRAME_SIZE * 2, vadAudioBuffer, 0, VAD_FRAME_SIZE * 2);
+                if (bytesRead == VAD_FRAME_SIZE * 2) {
+                    // Use the frame just read (16 bit) for VAD; avoids copying the whole (possibly long) output buffer
+                    System.arraycopy(audioData, 0, vadAudioBuffer, 0, VAD_FRAME_SIZE * 2);
 
                     isSpeech = vad.isSpeech(vadAudioBuffer);
                     if (isSpeech) {
@@ -240,10 +260,10 @@ public class Recorder {
         audioManager.stopBluetoothSco();
         audioManager.setBluetoothScoOn(false);
 
-        // Save recorded audio data to BufferStore (up to 30 seconds)
+        // Save recorded audio data to BufferStore (up to MAX_RECORDING_SECONDS)
         byte[] data = outputBuffer.toByteArray();
         RecordBuffer.setOutputBuffer(
-                Arrays.copyOf(data, Math.min(data.length, bytesForThirtySeconds))
+                data.length > maxBytes ? Arrays.copyOf(data, maxBytes) : data
         );
 
         if (totalBytesRead > 6400){  //min 0.2s
@@ -252,11 +272,19 @@ public class Recorder {
             sendUpdate(MSG_RECORDING_ERROR);
         }
 
-        // Notify the waiting thread that recording is complete
-        synchronized (fileSavedLock) {
-            fileSavedLock.notify(); // Notify that recording is finished
-        }
+    }
 
+    // RMS of a 16 bit PCM frame, mapped to 0..1 with a slight boost for quiet speech
+    private static float computeLevel(byte[] pcm, int length) {
+        int samples = length / 2;
+        if (samples == 0) return 0f;
+        double sum = 0;
+        for (int i = 0; i + 1 < length; i += 2) {
+            short s = (short) ((pcm[i] & 0xff) | (pcm[i + 1] << 8));
+            sum += (double) s * s;
+        }
+        double rms = Math.sqrt(sum / samples) / 32768.0;
+        return (float) Math.min(1.0, Math.sqrt(rms) * 2.5);
     }
 
 }

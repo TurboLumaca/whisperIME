@@ -37,6 +37,7 @@ import com.whispertflite.asr.Whisper;
 import com.whispertflite.asr.WhisperResult;
 import com.whispertflite.utils.HapticFeedback;
 import com.whispertflite.utils.InputLang;
+import com.whispertflite.utils.TapOrHoldRecordListener;
 
 import java.io.File;
 
@@ -170,16 +171,7 @@ public class WhisperInputMethodService extends InputMethodService {
             layoutButtons.setVisibility(View.GONE);
             HapticFeedback.vibrate(this);
             startRecording();
-            handler.post(() -> processingBar.setProgress(100));
-            countDownTimer = new CountDownTimer(30000, 1000) {
-                @Override
-                public void onTick(long l) {
-                    handler.post(() -> processingBar.setProgress((int) (l / 300)));
-                }
-                @Override
-                public void onFinish() {}
-            };
-            countDownTimer.start();
+            startCountDown();
             handler.post(() -> {
                 tvStatus.setText("");
                 tvStatus.setVisibility(View.GONE);
@@ -226,44 +218,41 @@ public class WhisperInputMethodService extends InputMethodService {
             }
         });
 
-        btnRecord.setOnTouchListener((v, event) -> {
-            if (event.getAction() == MotionEvent.ACTION_DOWN) {
-                // Pressed
-                handler.post(() -> btnRecord.setBackgroundResource(R.drawable.rounded_button_background_pressed));
-                if (checkRecordPermission()){
-                    if (!mWhisper.isInProgress()) {
-                        HapticFeedback.vibrate(this);
-                        startRecording();
-                        handler.post(() -> processingBar.setProgress(100));
-                        countDownTimer = new CountDownTimer(30000, 1000) {
-                            @Override
-                            public void onTick(long l) {
-                                handler.post(() -> processingBar.setProgress((int) (l / 300)));
-                            }
-                            @Override
-                            public void onFinish() {}
-                        };
-                        countDownTimer.start();
-                        handler.post(() -> {
-                            tvStatus.setText("");
-                            tvStatus.setVisibility(View.GONE);
-                        });
-                    } else {
-                        handler.post(() -> {
-                            tvStatus.setText(getString(R.string.please_wait));
-                            tvStatus.setVisibility(View.VISIBLE);
-                        });
-                    }
+        btnRecord.setOnTouchListener(new TapOrHoldRecordListener(new TapOrHoldRecordListener.Callback() {
+            @Override
+            public boolean onStartRecording() {
+                if (!checkRecordPermission()) return false;
+                if (mWhisper == null || mWhisper.isInProgress()) {
+                    handler.post(() -> {
+                        tvStatus.setText(getString(R.string.please_wait));
+                        tvStatus.setVisibility(View.VISIBLE);
+                    });
+                    return false;
                 }
-            } else if (event.getAction() == MotionEvent.ACTION_UP) {
-                // Released
+                handler.post(() -> btnRecord.setBackgroundResource(R.drawable.rounded_button_background_pressed));
+                HapticFeedback.vibrate(mContext);
+                startRecording();
+                startCountDown();
+                handler.post(() -> {
+                    tvStatus.setText("");
+                    tvStatus.setVisibility(View.GONE);
+                });
+                return true;
+            }
+
+            @Override
+            public void onStopRecording() {
                 handler.post(() -> btnRecord.setBackgroundResource(R.drawable.rounded_button_background));
                 if (mRecorder != null && mRecorder.isInProgress()) {
                     mRecorder.stop();
                 }
             }
-            return true;
-        });
+
+            @Override
+            public boolean isRecording() {
+                return mRecorder != null && mRecorder.isInProgress();
+            }
+        }));
 
         btnKeyboard.setOnClickListener(v -> {
             if (mWhisper != null) stopTranscription();
@@ -289,6 +278,19 @@ public class WhisperInputMethodService extends InputMethodService {
             switchToPreviousInputMethod();
         });
         return view;
+    }
+
+    private void startCountDown() {
+        handler.post(() -> processingBar.setProgress(100));
+        countDownTimer = new CountDownTimer(Recorder.MAX_RECORDING_MS, 1000) {
+            @Override
+            public void onTick(long l) {
+                handler.post(() -> processingBar.setProgress((int) (l * 100 / Recorder.MAX_RECORDING_MS)));
+            }
+            @Override
+            public void onFinish() {}
+        };
+        countDownTimer.start();
     }
 
     private void startRecording() {

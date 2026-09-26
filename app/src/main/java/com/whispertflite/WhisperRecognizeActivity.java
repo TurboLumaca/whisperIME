@@ -18,7 +18,6 @@ import android.os.CountDownTimer;
 import android.speech.RecognizerIntent;
 import android.util.Log;
 import android.view.Gravity;
-import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.ImageButton;
@@ -35,6 +34,7 @@ import com.whispertflite.asr.Whisper;
 import com.whispertflite.asr.WhisperResult;
 import com.whispertflite.utils.HapticFeedback;
 import com.whispertflite.utils.InputLang;
+import com.whispertflite.utils.TapOrHoldRecordListener;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -127,16 +127,7 @@ public class WhisperRecognizeActivity extends AppCompatActivity {
             btnRecord.setVisibility(View.GONE);
             HapticFeedback.vibrate(this);
             startRecording();
-            runOnUiThread(() -> processingBar.setProgress(100));
-            countDownTimer = new CountDownTimer(30000, 1000) {
-                @Override
-                public void onTick(long l) {
-                    runOnUiThread(() -> processingBar.setProgress((int) (l / 300)));
-                }
-                @Override
-                public void onFinish() {}
-            };
-            countDownTimer.start();
+            startCountDown();
         }
 
         btnModeAuto.setOnClickListener(v -> {
@@ -151,37 +142,34 @@ public class WhisperRecognizeActivity extends AppCompatActivity {
             finish();
         });
 
-        btnRecord.setOnTouchListener((v, event) -> {
-            if (event.getAction() == MotionEvent.ACTION_DOWN) {
-                // Pressed
-                runOnUiThread(() -> btnRecord.setBackgroundResource(R.drawable.rounded_button_background_pressed));
-                if (checkRecordPermission()){
-                    if (!mWhisper.isInProgress()) {
-                        HapticFeedback.vibrate(this);
-                        startRecording();
-                        runOnUiThread(() -> processingBar.setProgress(100));
-                        countDownTimer = new CountDownTimer(30000, 1000) {
-                            @Override
-                            public void onTick(long l) {
-                                runOnUiThread(() -> processingBar.setProgress((int) (l / 300)));
-                            }
-                            @Override
-                            public void onFinish() {}
-                        };
-                        countDownTimer.start();
-                    } else {
-                        runOnUiThread(() -> Toast.makeText(this, getString(R.string.please_wait),Toast.LENGTH_SHORT).show());
-                    }
+        btnRecord.setOnTouchListener(new TapOrHoldRecordListener(new TapOrHoldRecordListener.Callback() {
+            @Override
+            public boolean onStartRecording() {
+                if (!checkRecordPermission()) return false;
+                if (mWhisper == null || mWhisper.isInProgress()) {
+                    runOnUiThread(() -> Toast.makeText(mContext, getString(R.string.please_wait),Toast.LENGTH_SHORT).show());
+                    return false;
                 }
-            } else if (event.getAction() == MotionEvent.ACTION_UP) {
-                // Released
+                runOnUiThread(() -> btnRecord.setBackgroundResource(R.drawable.rounded_button_background_pressed));
+                HapticFeedback.vibrate(mContext);
+                startRecording();
+                startCountDown();
+                return true;
+            }
+
+            @Override
+            public void onStopRecording() {
                 runOnUiThread(() -> btnRecord.setBackgroundResource(R.drawable.rounded_button_background));
                 if (mRecorder != null && mRecorder.isInProgress()) {
                     mRecorder.stop();
                 }
             }
-            return true;
-        });
+
+            @Override
+            public boolean isRecording() {
+                return mRecorder != null && mRecorder.isInProgress();
+            }
+        }));
 
         btnCancel.setOnClickListener(v -> {
             if (mWhisper != null) stopTranscription();
@@ -190,6 +178,19 @@ public class WhisperRecognizeActivity extends AppCompatActivity {
         });
 
     }
+    private void startCountDown() {
+        runOnUiThread(() -> processingBar.setProgress(100));
+        countDownTimer = new CountDownTimer(Recorder.MAX_RECORDING_MS, 1000) {
+            @Override
+            public void onTick(long l) {
+                runOnUiThread(() -> processingBar.setProgress((int) (l * 100 / Recorder.MAX_RECORDING_MS)));
+            }
+            @Override
+            public void onFinish() {}
+        };
+        countDownTimer.start();
+    }
+
     private void startRecording() {
         if (modeAuto) mRecorder.initVad();
         mRecorder.start();

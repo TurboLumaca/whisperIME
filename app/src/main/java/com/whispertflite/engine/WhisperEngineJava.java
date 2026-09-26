@@ -74,16 +74,56 @@ public class WhisperEngineJava implements WhisperEngine {
 
     @Override
     public WhisperResult processRecordBuffer(Whisper.Action mAction, int mLangToken) {
-        // Calculate Mel spectrogram
-        Log.d(TAG, "Calculating Mel spectrogram...");
-        float[] melSpectrogram = getMelSpectrogram();
-        Log.d(TAG, "Mel spectrogram is calculated...!");
+        // Get samples in PCM_FLOAT format
+        float[] samples = RecordBuffer.getSamples();
 
-        // Perform inference
-        WhisperResult whisperResult = runInference(melSpectrogram, mAction, mLangToken);
-        Log.d(TAG, "Inference is executed...!");
+        // Whisper only accepts 30s windows: split longer recordings into chunks, cut at quiet points
+        int chunkSize = WhisperUtil.WHISPER_SAMPLE_RATE * WhisperUtil.WHISPER_CHUNK_SIZE;
+        StringBuilder text = new StringBuilder();
+        String language = "";
+        Whisper.Action task = null;
+        int start = 0;
+        do {
+            int end = findChunkEnd(samples, start, chunkSize);
+            Log.d(TAG, "Processing chunk " + start + " - " + end + " of " + samples.length);
 
-        return whisperResult;
+            // Calculate Mel spectrogram
+            float[] melSpectrogram = getMelSpectrogram(samples, start, end - start);
+            Log.d(TAG, "Mel spectrogram is calculated...!");
+
+            // Perform inference
+            WhisperResult chunkResult = runInference(melSpectrogram, mAction, mLangToken);
+            Log.d(TAG, "Inference is executed...!");
+
+            if (start == 0 && end == samples.length) return chunkResult;  // single chunk: unchanged behaviour
+
+            String chunkText = chunkResult.getResult().trim();
+            if (!chunkText.isEmpty()) text.append(' ').append(chunkText);  // leading space like Whisper's own output
+            if (language.isEmpty()) language = chunkResult.getLanguage();
+            if (task == null) task = chunkResult.getTask();
+            start = end;
+        } while (start < samples.length);
+
+        return new WhisperResult(text.toString(), language, task);
+    }
+
+    // Returns the end index of the chunk starting at start. If the rest exceeds chunkSize,
+    // the chunk is cut at the quietest 100ms frame within its last 8 seconds to avoid splitting words.
+    private static int findChunkEnd(float[] samples, int start, int chunkSize) {
+        if (samples.length - start <= chunkSize) return samples.length;
+        int frame = WhisperUtil.WHISPER_SAMPLE_RATE / 10;
+        int searchFrom = start + chunkSize - 8 * WhisperUtil.WHISPER_SAMPLE_RATE;
+        int bestEnd = start + chunkSize;
+        double bestEnergy = Double.MAX_VALUE;
+        for (int f = searchFrom; f + frame <= start + chunkSize; f += frame / 2) {
+            double energy = 0;
+            for (int i = f; i < f + frame; i++) energy += samples[i] * samples[i];
+            if (energy <= bestEnergy) {  // <= prefers later frames on ties
+                bestEnergy = energy;
+                bestEnd = f + frame / 2;
+            }
+        }
+        return bestEnd;
     }
 
 
@@ -104,14 +144,11 @@ public class WhisperEngineJava implements WhisperEngine {
         mInterpreter = new Interpreter(tfliteModel, options);
     }
 
-    private float[] getMelSpectrogram() {
-        // Get samples in PCM_FLOAT format
-        float[] samples = RecordBuffer.getSamples();
-
+    private float[] getMelSpectrogram(float[] samples, int offset, int length) {
         int fixedInputSize = WhisperUtil.WHISPER_SAMPLE_RATE * WhisperUtil.WHISPER_CHUNK_SIZE;
         float[] inputSamples = new float[fixedInputSize];
-        int copyLength = Math.min(samples.length, fixedInputSize);
-        System.arraycopy(samples, 0, inputSamples, 0, copyLength);
+        int copyLength = Math.min(length, fixedInputSize);
+        System.arraycopy(samples, offset, inputSamples, 0, copyLength);
 
         int cores = Runtime.getRuntime().availableProcessors();
         return mWhisperUtil.getMelSpectrogram(inputSamples, inputSamples.length, copyLength, cores);
