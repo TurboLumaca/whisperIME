@@ -46,12 +46,32 @@ supports a broader range of languages. Select your preferred model within the ap
 
 To get the most out of Whisper, follow these simple tips:
 
-- Press and hold the button while speaking or use automatic mode where available
+- Tap the button to start and stop recording, or press and hold it while speaking. Automatic mode is available too
 - Pause briefly before starting to speak
 - Speak clearly, loudly, and at a moderate pace
-- Please note that there is a limit of 30s for each recording
+- Recordings can be up to 5 minutes long. Whisper processes 30 s at a time, so longer recordings are transcribed in chunks
 
 By following these guidelines, you'll be able to enjoy accurate and efficient voice recognition with Whisper.
+
+## Floating microphone
+
+A floating microphone button appears when you edit a text field in any app. Tap it to dictate and insert the text into that field without switching keyboards. You can drag the button to either edge of the screen.
+
+Enable it in the app ("Floating mic button"), which opens the Accessibility settings. On Android 13+ you may first have to allow "restricted settings" for the app (App info → ⋮ menu).
+
+Why it is an accessibility service: Android lets apps use the microphone in the background and insert text into other apps only in a few cases. An accessibility service is the only reliable one. It is used only to:
+- find out whether a text field has focus, so the button can be shown,
+- insert the transcription into the focused field.
+
+It does not read or store screen content. Audio is processed on the device and never leaves it. The button is hidden in password fields, and dictated text is never placed in the clipboard for them.
+
+## Custom words
+
+Whisper models sometimes misspell names and technical terms (e.g. "Helena" instead of "Elena", "cloud code" instead of "Claude Code"). Under "Custom words…" you can add one entry per line:
+- `Elena`: words that sound alike are corrected to it. This applies to entries with at least 5 letters and to acronyms like `GPT`. Shorter entries only fix upper/lower case.
+- `cloud code = Claude Code`: explicit replacement.
+
+The corrections apply to the floating microphone, the keyboard, the app and the system voice input.
 
 [<img src="https://fdroid.gitlab.io/artwork/badge/get-it-on.png" height="75">](https://f-droid.org/de/packages/org.woheller69.whisper/) [<img src="https://www.openapk.net/images/openapk-badge.png" height="75">]( https://www.openapk.net/whisper/org.woheller69.whisper/)
 

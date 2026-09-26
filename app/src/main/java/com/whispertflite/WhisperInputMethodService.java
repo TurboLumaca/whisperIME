@@ -15,7 +15,6 @@ import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.inputmethodservice.InputMethodService;
 
-import android.os.CountDownTimer;
 import android.os.Handler;
 import android.os.Looper;
 import androidx.preference.PreferenceManager;
@@ -37,6 +36,7 @@ import com.whispertflite.asr.Whisper;
 import com.whispertflite.asr.WhisperResult;
 import com.whispertflite.utils.HapticFeedback;
 import com.whispertflite.utils.InputLang;
+import com.whispertflite.utils.RecordingCountdown;
 import com.whispertflite.utils.TapOrHoldRecordListener;
 
 import java.io.File;
@@ -58,7 +58,7 @@ public class WhisperInputMethodService extends InputMethodService {
     private SharedPreferences sp = null;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private Context mContext;
-    private CountDownTimer countDownTimer;
+    private RecordingCountdown countDownTimer;
     private static boolean translate = false;
     private boolean modeAuto = false;
     private RelativeLayout layoutButtons;
@@ -155,7 +155,7 @@ public class WhisperInputMethodService extends InputMethodService {
                     startTranscription();
                 } else if (message.equals(Recorder.MSG_RECORDING_ERROR)) {
                     HapticFeedback.vibrate(mContext);
-                    if (countDownTimer!=null) { countDownTimer.cancel();}
+                    if (countDownTimer!=null) countDownTimer.cancel();
                     handler.post(() -> {
                         btnRecord.setBackgroundResource(R.drawable.rounded_button_background);
                         tvStatus.setText(getString(R.string.error_no_input));
@@ -218,7 +218,7 @@ public class WhisperInputMethodService extends InputMethodService {
             }
         });
 
-        btnRecord.setOnTouchListener(new TapOrHoldRecordListener(new TapOrHoldRecordListener.Callback() {
+        TapOrHoldRecordListener.attach(btnRecord, new TapOrHoldRecordListener.Callback() {
             @Override
             public boolean onStartRecording() {
                 if (!checkRecordPermission()) return false;
@@ -252,7 +252,7 @@ public class WhisperInputMethodService extends InputMethodService {
             public boolean isRecording() {
                 return mRecorder != null && mRecorder.isInProgress();
             }
-        }));
+        });
 
         btnKeyboard.setOnClickListener(v -> {
             if (mWhisper != null) stopTranscription();
@@ -281,15 +281,8 @@ public class WhisperInputMethodService extends InputMethodService {
     }
 
     private void startCountDown() {
-        handler.post(() -> processingBar.setProgress(100));
-        countDownTimer = new CountDownTimer(Recorder.MAX_RECORDING_MS, 1000) {
-            @Override
-            public void onTick(long l) {
-                handler.post(() -> processingBar.setProgress((int) (l * 100 / Recorder.MAX_RECORDING_MS)));
-            }
-            @Override
-            public void onFinish() {}
-        };
+        if (countDownTimer != null) countDownTimer.cancel();
+        countDownTimer = new RecordingCountdown(processingBar);  // the view (and progress bar) may have been recreated
         countDownTimer.start();
     }
 
@@ -333,7 +326,7 @@ public class WhisperInputMethodService extends InputMethodService {
     }
 
     private void startTranscription() {
-        if (countDownTimer!=null) { countDownTimer.cancel();}
+        if (countDownTimer!=null) countDownTimer.cancel();
         handler.post(() -> processingBar.setProgress(0));
         handler.post(() -> processingBar.setIndeterminate(true));
         if (mWhisper!=null){
@@ -344,7 +337,7 @@ public class WhisperInputMethodService extends InputMethodService {
             int langToken = InputLang.getIdForLanguage(InputLang.getLangList(),langCode);
             Log.d("WhisperIME","default langToken " + langToken);
             mWhisper.setLanguage(langToken);
-            mWhisper.start();
+            mWhisper.start(mRecorder.getRecordedAudio());
         }
     }
 

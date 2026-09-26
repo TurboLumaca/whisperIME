@@ -53,6 +53,7 @@
     <string name="overlay_enable">Floating mic button:</string>
     <string name="custom_vocabulary_button">Custom words…</string>
     <string name="custom_vocabulary_title">Custom words</string>
-    <string name="custom_vocabulary_help">One entry per line.\n• A word or name (e.g. Elena): words that sound alike are corrected to it (Helena → Elena).\n• wrong = right (e.g. cloud code = Claude Code): explicit replacement.</string>
+    <string name="custom_vocabulary_help">One entry per line.\n• A word or name with at least 5 letters, or an acronym (e.g. Elena, GPT): words that sound alike are corrected to it (Helena → Elena, GPD → GPT). Shorter words only fix upper/lower case.\n• wrong = right (e.g. cloud code = Claude Code): explicit replacement.</string>
     <string name="custom_vocabulary_reset">Reset</string>
+    <string name="overlay_transcribing_progress">Transcribing… %1$d/%2$d</string>
 </resources>

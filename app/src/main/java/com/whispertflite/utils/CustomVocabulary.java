@@ -14,6 +14,9 @@ import java.util.regex.Pattern;
  * Post-processing of transcriptions with a user editable vocabulary (one entry per line):
  * - "Word"            words/phrases that sound alike are replaced by it, e.g. Elena fixes "Helena"
  * - "wrong = Right"   explicit replacement, e.g. "cloud code = Claude Code"
+ * Sound-alike matching is only used for entries with at least {@link #MIN_FUZZY_LETTERS} letters
+ * or all-caps acronyms (GPT), otherwise a short entry like "Tove" would also replace "dove".
+ * Shorter entries only fix case and accents.
  * The Whisper tflite models cannot take a prompt, so this is how custom words are supported.
  */
 public class CustomVocabulary {
@@ -26,16 +29,26 @@ public class CustomVocabulary {
             "cloud code = Claude Code\n" +
             "chat gpt = ChatGPT\n";
 
-    private static final Pattern WORD = Pattern.compile("[\\p{L}\\p{N}]+(?:['’][\\p{L}]+)?");
+    static final int MIN_FUZZY_LETTERS = 5;
+
+    // Apostrophes are separators, so Italian elisions like "dell'Helena" are matched word by word
+    private static final Pattern WORD = Pattern.compile("[\\p{L}\\p{N}]+");
 
     private static class Entry {
-        final String[] keys;   // normalized words to match
+        final String[] keys;   // normalized words to match (phonetic or exact, see fuzzy)
+        final boolean fuzzy;
         final String replacement;
-        Entry(String[] keys, String replacement) {
+
+        Entry(String[] keys, boolean fuzzy, String replacement) {
             this.keys = keys;
+            this.fuzzy = fuzzy;
             this.replacement = replacement;
         }
     }
+
+    // Parsed vocabulary of the last call, re-parsed only when the text changes
+    private static String cachedVocabulary;
+    private static List<Entry> cachedEntries;
 
     public static String getVocabulary(Context context) {
         return PreferenceManager.getDefaultSharedPreferences(context).getString(PREF_KEY, DEFAULT_VOCABULARY);
@@ -51,16 +64,18 @@ public class CustomVocabulary {
 
     public static String apply(String vocabulary, String text) {
         if (text == null || text.trim().isEmpty() || vocabulary == null) return text;
-        List<Entry> entries = parse(vocabulary);
+        List<Entry> entries = entries(vocabulary);
         if (entries.isEmpty()) return text;
 
         // Tokenize, keeping the separators so punctuation and spacing are preserved
         List<int[]> spans = new ArrayList<>();
-        List<String> norm = new ArrayList<>();
+        List<String> exact = new ArrayList<>();
+        List<String> phonetic = new ArrayList<>();
         Matcher m = WORD.matcher(text);
         while (m.find()) {
             spans.add(new int[]{m.start(), m.end()});
-            norm.add(normalize(m.group()));
+            exact.add(exactKey(m.group()));
+            phonetic.add(phoneticKey(m.group()));
         }
 
         StringBuilder out = new StringBuilder();
@@ -69,7 +84,7 @@ public class CustomVocabulary {
         while (i < spans.size()) {
             Entry match = null;
             for (Entry e : entries) {  // entries are sorted longest first
-                if (matches(norm, i, e.keys)) {
+                if (matches(e.fuzzy ? phonetic : exact, i, e.keys)) {
                     match = e;
                     break;
                 }
@@ -88,12 +103,20 @@ public class CustomVocabulary {
         return out.toString();
     }
 
-    private static boolean matches(List<String> norm, int from, String[] keys) {
-        if (from + keys.length > norm.size()) return false;
+    private static boolean matches(List<String> words, int from, String[] keys) {
+        if (from + keys.length > words.size()) return false;
         for (int k = 0; k < keys.length; k++) {
-            if (!norm.get(from + k).equals(keys[k])) return false;
+            if (!words.get(from + k).equals(keys[k])) return false;
         }
         return true;
+    }
+
+    private static synchronized List<Entry> entries(String vocabulary) {
+        if (!vocabulary.equals(cachedVocabulary)) {
+            cachedEntries = parse(vocabulary);
+            cachedVocabulary = vocabulary;
+        }
+        return cachedEntries;
     }
 
     private static List<Entry> parse(String vocabulary) {
@@ -109,24 +132,40 @@ public class CustomVocabulary {
                 target = line.substring(eq + 1).trim();
                 if (source.isEmpty() || target.isEmpty()) continue;
             }
-            List<String> keys = new ArrayList<>();
+            List<String> words = new ArrayList<>();
             Matcher m = WORD.matcher(source);
-            while (m.find()) keys.add(normalize(m.group()));
-            if (keys.isEmpty()) continue;
-            entries.add(new Entry(keys.toArray(new String[0]), target));
+            while (m.find()) words.add(m.group());
+            if (words.isEmpty()) continue;
+
+            boolean fuzzy = isFuzzy(words);
+            String[] keys = new String[words.size()];
+            for (int i = 0; i < keys.length; i++) keys[i] = fuzzy ? phoneticKey(words.get(i)) : exactKey(words.get(i));
+            entries.add(new Entry(keys, fuzzy, target));
         }
         // Longest phrases first, so "Claude Code" wins over "Claude"
         entries.sort((a, b) -> b.keys.length - a.keys.length);
         return entries;
     }
 
+    private static boolean isFuzzy(List<String> words) {
+        int letters = 0;
+        for (String w : words) letters += w.length();
+        if (letters >= MIN_FUZZY_LETTERS) return true;
+        String joined = String.join("", words);
+        return joined.length() >= 2 && joined.equals(joined.toUpperCase()) && !joined.equals(joined.toLowerCase());
+    }
+
+    // Case and accent insensitive key
+    static String exactKey(String word) {
+        return Normalizer.normalize(word.toLowerCase(), Normalizer.Form.NFD).replaceAll("\\p{M}", "");
+    }
+
     /**
      * Rough phonetic key, tuned for the errors Whisper makes on names/brands:
      * case, accents, silent h, ph/f, y/i, k/q/c, w/v, voiced/unvoiced consonants (d/t, b/p) and double letters.
      */
-    static String normalize(String word) {
-        String s = Normalizer.normalize(word.toLowerCase(), Normalizer.Form.NFD).replaceAll("\\p{M}", "");
-        s = s.replace("'", "").replace("’", "");
+    static String phoneticKey(String word) {
+        String s = exactKey(word);
         if (s.length() <= 2) return s;  // keep short words exact
         s = s.replace("ph", "f").replace("h", "")
                 .replace('y', 'i').replace('k', 'c').replace('q', 'c').replace('w', 'v')

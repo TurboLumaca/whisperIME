@@ -75,4 +75,6 @@ dependencies {
     implementation 'com.github.gkonovalov.android-vad:webrtc:2.0.10'
     implementation 'com.github.houbb:opencc4j:1.8.1'
     implementation 'com.github.woheller69:FreeDroidWarn:+'
+
+    testImplementation 'junit:junit:4.13.2'
 }

@@ -52,6 +52,7 @@
     <string name="overlay_enable">Microfono flottante:</string>
     <string name="custom_vocabulary_button">Parole personalizzate…</string>
     <string name="custom_vocabulary_title">Parole personalizzate</string>
-    <string name="custom_vocabulary_help">Una voce per riga.\n• Una parola o un nome (es. Elena): le parole simili nel suono vengono corrette (Helena → Elena).\n• sbagliato = giusto (es. cloud code = Claude Code): sostituzione esplicita.</string>
+    <string name="custom_vocabulary_help">Una voce per riga.\n• Una parola o un nome di almeno 5 lettere, o una sigla (es. Elena, GPT): le parole simili nel suono vengono corrette (Helena → Elena, GPD → GPT). Le parole più corte correggono solo maiuscole/minuscole.\n• sbagliato = giusto (es. cloud code = Claude Code): sostituzione esplicita.</string>
     <string name="custom_vocabulary_reset">Ripristina</string>
+    <string name="overlay_transcribing_progress">Trascrizione… %1$d/%2$d</string>
 </resources>

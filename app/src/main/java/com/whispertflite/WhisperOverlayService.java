@@ -67,6 +67,8 @@ public class WhisperOverlayService extends AccessibilityService {
     private static final long VISIBILITY_CHECK_DELAY_MS = 150;
     private static final String PREF_BUBBLE_X = "overlayBubbleX";
     private static final String PREF_BUBBLE_Y = "overlayBubbleY";
+    // Time the target app gets to read the temporary clip before the previous clipboard is restored
+    private static final long CLIPBOARD_RESTORE_DELAY_MS = 500;
 
     private enum State { IDLE, RECORDING, TRANSCRIBING }
 
@@ -137,6 +139,9 @@ public class WhisperOverlayService extends AccessibilityService {
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
+        // Our own bubble/panel windows cause events too, they never change the focused field
+        if (event.getPackageName() != null && getPackageName().contentEquals(event.getPackageName())
+                && event.getEventType() != AccessibilityEvent.TYPE_WINDOWS_CHANGED) return;
         scheduleVisibilityCheck();
     }
 
@@ -239,8 +244,13 @@ public class WhisperOverlayService extends AccessibilityService {
         if (visible) {
             clampBubblePosition();
             windowManager.addView(bubbleRoot, bubbleParams);
+            preloadModel();
         } else {
             windowManager.removeView(bubbleRoot);
+            if (!panelShown) {
+                handler.removeCallbacks(unloadModel);
+                handler.postDelayed(unloadModel, MODEL_UNLOAD_DELAY_MS);
+            }
         }
         bubbleShown = visible;
     }
@@ -283,9 +293,12 @@ public class WhisperOverlayService extends AccessibilityService {
         setBubbleVisible(!panelShown && isTextInputActive());
     }
 
-    // True while a keyboard is shown or an editable field has input focus. Hidden while our own IME is active.
+    // True while a keyboard is shown or an editable field has input focus.
+    // Hidden for password fields and while our own IME is active.
     private boolean isTextInputActive() {
         try {
+            AccessibilityNodeInfo focus = findFocusedEditable();
+            if (focus != null && focus.isPassword()) return false;
             for (AccessibilityWindowInfo window : getWindows()) {
                 if (window.getType() == AccessibilityWindowInfo.TYPE_INPUT_METHOD) {
                     AccessibilityNodeInfo root = window.getRoot();
@@ -293,7 +306,7 @@ public class WhisperOverlayService extends AccessibilityService {
                             || !getPackageName().contentEquals(root.getPackageName());
                 }
             }
-            return findFocusedEditable() != null;
+            return focus != null;
         } catch (RuntimeException e) {
             Log.w(TAG, "Cannot inspect windows", e);
             return false;
@@ -382,6 +395,8 @@ public class WhisperOverlayService extends AccessibilityService {
         if (state == State.RECORDING) {
             state = State.IDLE;
             mRecorder.stop();
+        } else if (state == State.TRANSCRIBING && mWhisper != null) {
+            mWhisper.stop();  // abort the inference instead of letting it run for nothing
         }
         session++;
         state = State.IDLE;
@@ -460,7 +475,7 @@ public class WhisperOverlayService extends AccessibilityService {
         mWhisper.setAction(Whisper.ACTION_TRANSCRIBE);
         String langCode = sp.getString("language", "auto");
         mWhisper.setLanguage(InputLang.getIdForLanguage(InputLang.getLangList(), langCode));
-        mWhisper.start();
+        mWhisper.start(mRecorder.getRecordedAudio());
     }
 
     private void onTranscriptionResult(WhisperResult whisperResult) {
@@ -530,49 +545,63 @@ public class WhisperOverlayService extends AccessibilityService {
 
     private void insertText(String text) {
         AccessibilityNodeInfo node = findFocusedEditable();
+        if (node != null && node.isPassword()) return;  // never put dictated text into password fields or the clipboard
         if (node != null) {
-            if (!node.isPassword()) {
-                CharSequence current = node.getText();
-                if (current == null || node.isShowingHintText()) current = "";
-                int len = current.length();
-                int start = node.getTextSelectionStart();
-                int end = node.getTextSelectionEnd();
-                if (start < 0 || end < 0 || start > len || end > len) {
-                    start = len;
-                    end = len;
-                }
-                if (start > end) {
-                    int tmp = start;
-                    start = end;
-                    end = tmp;
-                }
-                String insert = text;
-                if (start > 0 && !Character.isWhitespace(current.charAt(start - 1))) insert = " " + insert;
-                if (end < len && !Character.isWhitespace(current.charAt(end))) insert = insert + " ";
-
-                Bundle args = new Bundle();
-                args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
-                        TextUtils.concat(current.subSequence(0, start), insert, current.subSequence(end, len)));
-                if (node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) {
-                    int cursor = start + insert.length();
-                    Bundle selection = new Bundle();
-                    selection.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, cursor);
-                    selection.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, cursor);
-                    node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, selection);
-                    return;
-                }
+            CharSequence current = fieldText(node);
+            int len = current.length();
+            int start = node.getTextSelectionStart();
+            int end = node.getTextSelectionEnd();
+            if (start < 0 || end < 0 || start > len || end > len) {
+                start = len;
+                end = len;
             }
-            copyToClipboard(text);
-            if (node.performAction(AccessibilityNodeInfo.ACTION_PASTE)) return;
-        } else {
-            copyToClipboard(text);
+            if (start > end) {
+                int tmp = start;
+                start = end;
+                end = tmp;
+            }
+            String insert = text;
+            if (start > 0 && !Character.isWhitespace(current.charAt(start - 1))) insert = " " + insert;
+            if (end < len && !Character.isWhitespace(current.charAt(end))) insert = insert + " ";
+
+            Bundle args = new Bundle();
+            args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                    TextUtils.concat(current.subSequence(0, start), insert, current.subSequence(end, len)));
+            // Some apps (WebView, some Compose screens) report success but ignore SET_TEXT:
+            // only fall back to pasting if the field content did not change at all (avoids inserting twice)
+            boolean setText = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args);
+            if (setText && node.refresh() && !TextUtils.equals(fieldText(node), current)) {
+                int cursor = start + insert.length();
+                Bundle selection = new Bundle();
+                selection.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, cursor);
+                selection.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, cursor);
+                node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, selection);
+                return;
+            }
+            if (pasteText(node, text)) return;
         }
+        // No usable field: leave the text in the clipboard so the user can paste it
+        getSystemService(ClipboardManager.class).setPrimaryClip(ClipData.newPlainText(getString(R.string.model_output), text));
         Toast.makeText(this, R.string.overlay_copied, Toast.LENGTH_LONG).show();
     }
 
-    private void copyToClipboard(String text) {
+    // Text of an editable node, "" while it only shows its hint
+    private static CharSequence fieldText(AccessibilityNodeInfo node) {
+        CharSequence text = node.getText();
+        return text == null || node.isShowingHintText() ? "" : text;
+    }
+
+    // Pastes via a temporary clip, then restores the user's previous clipboard content
+    private boolean pasteText(AccessibilityNodeInfo node, String text) {
         ClipboardManager clipboard = getSystemService(ClipboardManager.class);
+        ClipData previous = clipboard.getPrimaryClip();
         clipboard.setPrimaryClip(ClipData.newPlainText(getString(R.string.model_output), text));
+        if (!node.performAction(AccessibilityNodeInfo.ACTION_PASTE)) return false;
+        handler.postDelayed(() -> {
+            if (previous != null) clipboard.setPrimaryClip(previous);
+            else clipboard.clearPrimaryClip();
+        }, CLIPBOARD_RESTORE_DELAY_MS);
+        return true;
     }
 
     // ---------------------------------------------------------------- model
@@ -597,6 +626,15 @@ public class WhisperOverlayService extends AccessibilityService {
                 public void onResultReceived(WhisperResult result) {
                     handler.post(() -> onTranscriptionResult(result));
                 }
+
+                @Override
+                public void onProgress(int chunk, int total) {
+                    handler.post(() -> {
+                        if (state == State.TRANSCRIBING && total > 1) {
+                            tvStatus.setText(getString(R.string.overlay_transcribing_progress, chunk + 1, total));
+                        }
+                    });
+                }
             });
         }
         if (modelLoading) return;
@@ -620,8 +658,14 @@ public class WhisperOverlayService extends AccessibilityService {
         });
     }
 
+    // Load the model while the bubble is visible, so the first dictation does not wait for it
+    private void preloadModel() {
+        handler.removeCallbacks(unloadModel);
+        if (modelFile().exists()) ensureModelLoaded();
+    }
+
     private void unloadModelIfIdle() {
-        if (panelShown || mWhisper == null || !modelReady) return;
+        if (panelShown || bubbleShown || mWhisper == null || !modelReady) return;
         if (mWhisper.isInProgress()) {
             handler.postDelayed(unloadModel, MODEL_UNLOAD_DELAY_MS);
             return;

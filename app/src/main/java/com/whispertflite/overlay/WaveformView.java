@@ -30,6 +30,12 @@ public class WaveformView extends View {
     private final float[] targets = new float[BAR_COUNT];  // heights to animate to
     private Mode mode = Mode.IDLE;
 
+    // Microphone levels arrive on the recording thread (~33/s); they are collected here and
+    // consumed in onDraw, so no Runnable has to be posted per audio frame
+    private final Object pendingLock = new Object();
+    private float pendingLevel = 0f;
+    private int pendingCount = 0;
+
     public WaveformView(Context context) {
         this(context, null);
     }
@@ -50,13 +56,27 @@ public class WaveformView extends View {
 
     // Called with the current microphone level (0..1), may be called from any thread
     public void pushLevel(float level) {
-        post(() -> {
-            if (mode != Mode.RECORDING) return;
-            // Scroll left and add the new level on the right
-            System.arraycopy(targets, 1, targets, 0, BAR_COUNT - 1);
-            targets[BAR_COUNT - 1] = Math.max(0.1f, Math.min(1f, level));
-            postInvalidateOnAnimation();
-        });
+        boolean first;
+        synchronized (pendingLock) {
+            first = pendingCount == 0;
+            pendingLevel = Math.max(pendingLevel, level);
+            pendingCount++;
+        }
+        if (first) postInvalidateOnAnimation();  // thread safe
+    }
+
+    // Scroll left and add the loudest level received since the last frame on the right
+    private void consumePendingLevel() {
+        float level;
+        synchronized (pendingLock) {
+            if (pendingCount == 0) return;
+            level = pendingLevel;
+            pendingLevel = 0f;
+            pendingCount = 0;
+        }
+        if (mode != Mode.RECORDING) return;
+        System.arraycopy(targets, 1, targets, 0, BAR_COUNT - 1);
+        targets[BAR_COUNT - 1] = Math.max(0.1f, Math.min(1f, level));
     }
 
     @Override
@@ -65,6 +85,7 @@ public class WaveformView extends View {
         int w = getWidth() - getPaddingLeft() - getPaddingRight();
         int h = getHeight() - getPaddingTop() - getPaddingBottom();
         if (w <= 0 || h <= 0) return;
+        consumePendingLevel();
 
         if (mode == Mode.PROCESSING) {
             double t = SystemClock.uptimeMillis() / 180.0;

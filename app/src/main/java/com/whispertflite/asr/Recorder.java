@@ -41,19 +41,19 @@ public class Recorder {
     public static final String MSG_RECORDING = "Recording...";
     public static final String MSG_RECORDING_DONE = "Recording done...!";
     public static final String MSG_RECORDING_ERROR = "Recording error...";
-    // Longer recordings are split into 30s chunks by the engine
+    // Longer recordings are split into 30s chunks by the engine. 5 min = 9.6 MB of 16 bit PCM
+    // (+ 19 MB as floats while transcribing) and about 10 inference passes, a sensible upper bound.
     public static final int MAX_RECORDING_SECONDS = 300;
     public static final long MAX_RECORDING_MS = MAX_RECORDING_SECONDS * 1000L;
 
     private final Context mContext;
-    private final AtomicBoolean mInProgress = new AtomicBoolean(false);
+    private final AtomicBoolean mInProgress = new AtomicBoolean(false);  // recording requested / running
+    private final AtomicBoolean mBusy = new AtomicBoolean(false);        // worker thread still owns the microphone
+    private volatile byte[] mRecordedAudio;                               // 16 bit PCM of the last recording
 
     private RecorderListener mListener;
     private final Lock lock = new ReentrantLock();
     private final Condition hasTask = lock.newCondition();
-    // Used by stop() to wait until recordAudio() finishes and notifies here
-    private final Object fileSavedLock = new Object();
-    private boolean recordingDone = true;  // guarded by fileSavedLock
 
     private volatile boolean shouldStartRecording = false;
     private boolean useVAD = false;
@@ -76,16 +76,15 @@ public class Recorder {
 
 
     public void start() {
-        if (!mInProgress.compareAndSet(false, true)) {
+        // Refuse while a previous recording is still being finished by the worker thread
+        if (!mBusy.compareAndSet(false, true)) {
             Log.d(TAG, "Recording is already in progress...");
             return;
         }
+        mInProgress.set(true);
         lock.lock();
         try {
             Log.d(TAG, "Recording starts now");
-            synchronized (fileSavedLock) {
-                recordingDone = false;
-            }
             shouldStartRecording = true;
             hasTask.signal();
         } finally {
@@ -106,24 +105,18 @@ public class Recorder {
     }
 
 
+    /**
+     * Asks the recording thread to stop. Non-blocking (safe on the UI thread): the audio is
+     * available via {@link #getRecordedAudio()} once MSG_RECORDING_DONE has been sent.
+     */
     public void stop() {
         Log.d(TAG, "Recording stopped");
         mInProgress.set(false);
+    }
 
-        // Wait for the recording thread to finish (it may already have finished, e.g. max length reached)
-        synchronized (fileSavedLock) {
-            long deadline = System.currentTimeMillis() + 3000;
-            while (!recordingDone) {
-                long remaining = deadline - System.currentTimeMillis();
-                if (remaining <= 0) break;
-                try {
-                    fileSavedLock.wait(remaining); // Wait until notified by the recording thread
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt(); // Restore interrupted status
-                    break;
-                }
-            }
-        }
+    /** 16 bit PCM (16 kHz mono) of the last finished recording, owned by this Recorder instance. */
+    public byte[] getRecordedAudio() {
+        return mRecordedAudio;
     }
 
     public boolean isInProgress() {
@@ -159,10 +152,7 @@ public class Recorder {
                 sendUpdate(e.getMessage());
             } finally {
                 mInProgress.set(false);
-                synchronized (fileSavedLock) {
-                    recordingDone = true;
-                    fileSavedLock.notifyAll();
-                }
+                mBusy.set(false);
             }
         }
     }
@@ -260,11 +250,9 @@ public class Recorder {
         audioManager.stopBluetoothSco();
         audioManager.setBluetoothScoOn(false);
 
-        // Save recorded audio data to BufferStore (up to MAX_RECORDING_SECONDS)
+        // Keep the recorded audio (up to MAX_RECORDING_SECONDS) for the transcription
         byte[] data = outputBuffer.toByteArray();
-        RecordBuffer.setOutputBuffer(
-                data.length > maxBytes ? Arrays.copyOf(data, maxBytes) : data
-        );
+        mRecordedAudio = data.length > maxBytes ? Arrays.copyOf(data, maxBytes) : data;
 
         if (totalBytesRead > 6400){  //min 0.2s
             sendUpdate(MSG_RECORDING_DONE);

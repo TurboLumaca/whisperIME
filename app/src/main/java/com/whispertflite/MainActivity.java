@@ -11,7 +11,6 @@ import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
-import android.os.CountDownTimer;
 import androidx.appcompat.app.AppCompatDelegate;
 import androidx.preference.PreferenceManager;
 import android.provider.Settings;
@@ -47,6 +46,7 @@ import com.whispertflite.utils.CustomVocabulary;
 import com.whispertflite.utils.HapticFeedback;
 import com.whispertflite.utils.InputLang;
 import com.whispertflite.utils.LanguagePairAdapter;
+import com.whispertflite.utils.RecordingCountdown;
 import com.whispertflite.utils.TapOrHoldRecordListener;
 import com.whispertflite.utils.ThemeUtils;
 
@@ -95,7 +95,7 @@ public class MainActivity extends AppCompatActivity {
     private File selectedTfliteFile = null;
     private SharedPreferences sp = null;
     private Spinner spinnerTflite;
-    private CountDownTimer countDownTimer;
+    private RecordingCountdown countDownTimer;
     private Spinner spinnerLanguage;
     private int langToken = -1;
     private long startTime = 0;
@@ -240,7 +240,7 @@ public class MainActivity extends AppCompatActivity {
         // Implementation of record button functionality
         btnRecord = findViewById(R.id.btnRecord);
 
-        btnRecord.setOnTouchListener(new TapOrHoldRecordListener(new TapOrHoldRecordListener.Callback() {
+        TapOrHoldRecordListener.attach(btnRecord, new TapOrHoldRecordListener.Callback() {
             @Override
             public boolean onStartRecording() {
                 Log.d(TAG, "Start recording...");
@@ -251,15 +251,8 @@ public class MainActivity extends AppCompatActivity {
                 runOnUiThread(() -> btnRecord.setBackgroundResource(R.drawable.rounded_button_background_pressed));
                 HapticFeedback.vibrate(mContext);
                 startRecording();
-                runOnUiThread(() -> processingBar.setProgress(100));
-                countDownTimer = new CountDownTimer(Recorder.MAX_RECORDING_MS, 1000) {
-                    @Override
-                    public void onTick(long l) {
-                        runOnUiThread(() -> processingBar.setProgress((int) (l * 100 / Recorder.MAX_RECORDING_MS)));
-                    }
-                    @Override
-                    public void onFinish() {}
-                };
+                if (countDownTimer != null) countDownTimer.cancel();
+                countDownTimer = new RecordingCountdown(processingBar);
                 countDownTimer.start();
                 return true;
             }
@@ -277,7 +270,7 @@ public class MainActivity extends AppCompatActivity {
             public boolean isRecording() {
                 return mRecorder != null && mRecorder.isInProgress();
             }
-        }));
+        });
 
         layoutModeChinese = findViewById(R.id.layout_mode_chinese);
         modeSimpleChinese = findViewById(R.id.mode_simple_chinese);
@@ -328,7 +321,7 @@ public class MainActivity extends AppCompatActivity {
                     else startProcessing(Whisper.ACTION_TRANSCRIBE);
                 } else if (message.equals(Recorder.MSG_RECORDING_ERROR)) {
                     HapticFeedback.vibrate(mContext);
-                    if (countDownTimer!=null) { countDownTimer.cancel();}
+                    if (countDownTimer!=null) countDownTimer.cancel();
                     runOnUiThread(() -> {
                         btnRecord.setBackgroundResource(R.drawable.rounded_button_background);
                         processingBar.setProgress(0);
@@ -546,14 +539,14 @@ public class MainActivity extends AppCompatActivity {
 
     // Transcription calls
     private void startProcessing(Whisper.Action action) {
-        if (countDownTimer!=null) { countDownTimer.cancel();}
+        if (countDownTimer!=null) countDownTimer.cancel();
         runOnUiThread(() -> {
             processingBar.setProgress(0);
             processingBar.setIndeterminate(true);
         });
         mWhisper.setAction(action);
         mWhisper.setLanguage(langToken);
-        mWhisper.start();
+        mWhisper.start(mRecorder.getRecordedAudio());
     }
 
     private void stopProcessing() {
