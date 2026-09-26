@@ -86,7 +86,7 @@ Android lets apps use the microphone in the background and insert text into othe
 It does not read or store screen content. Audio is processed on the device and never leaves it.
 
 - The button is hidden in password fields and nothing is inserted there.
-- If an app does not accept the text directly, it is pasted through the clipboard. Your previous clipboard content is restored right after.
+- The text is inserted at the cursor by pasting it through the clipboard (marked as sensitive). Your previous clipboard content is restored right after. If an app refuses to paste, the field text is rewritten instead.
 - If there is no text field to insert into, the text is left in the clipboard.
 
 ## Custom words

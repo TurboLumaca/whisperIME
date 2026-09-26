@@ -19,6 +19,7 @@ import android.graphics.PixelFormat;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PersistableBundle;
 import android.os.SystemClock;
 import android.text.TextUtils;
 import android.text.method.ScrollingMovementMethod;
@@ -688,13 +689,15 @@ public class WhisperOverlayService extends AccessibilityService {
             if (start > 0 && !Character.isWhitespace(current.charAt(start - 1))) insert = " " + insert;
             if (end < len && !Character.isWhitespace(current.charAt(end))) insert = insert + " ";
 
+            // Paste first: it inserts at the cursor without rewriting the field, so it is independent of how the
+            // app reports the field's text (some apps expose the hint, e.g. "Message", as text) and keeps undo working
+            if (pasteText(node, insert)) return;
+
+            // The app refused to paste: rewrite the field's text instead
             Bundle args = new Bundle();
             args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
                     TextUtils.concat(current.subSequence(0, start), insert, current.subSequence(end, len)));
-            // Some apps (WebView, some Compose screens) report success but ignore SET_TEXT:
-            // only fall back to pasting if the field content did not change at all (avoids inserting twice)
-            boolean setText = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args);
-            if (setText && node.refresh() && !TextUtils.equals(fieldText(node), current)) {
+            if (node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) {
                 int cursor = start + insert.length();
                 Bundle selection = new Bundle();
                 selection.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, cursor);
@@ -702,7 +705,6 @@ public class WhisperOverlayService extends AccessibilityService {
                 node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, selection);
                 return;
             }
-            if (pasteText(node, text)) return;
         }
         // No usable field: leave the text in the clipboard so the user can paste it
         getSystemService(ClipboardManager.class).setPrimaryClip(ClipData.newPlainText(getString(R.string.model_output), text));
@@ -719,12 +721,21 @@ public class WhisperOverlayService extends AccessibilityService {
         return text;
     }
 
-    // Pastes via a temporary clip, then restores the user's previous clipboard content
+    // Pastes via a temporary clip (marked sensitive, so no clipboard preview is shown), then restores the
+    // user's previous clipboard content. Returns false, with the clipboard untouched, if the app refuses to paste.
     private boolean pasteText(AccessibilityNodeInfo node, String text) {
         ClipboardManager clipboard = getSystemService(ClipboardManager.class);
         ClipData previous = clipboard.getPrimaryClip();
-        clipboard.setPrimaryClip(ClipData.newPlainText(getString(R.string.model_output), text));
-        if (!node.performAction(AccessibilityNodeInfo.ACTION_PASTE)) return false;
+        ClipData clip = ClipData.newPlainText(getString(R.string.model_output), text);
+        PersistableBundle extras = new PersistableBundle();
+        extras.putBoolean("android.content.extra.IS_SENSITIVE", true);  // ClipDescription.EXTRA_IS_SENSITIVE, API 33
+        clip.getDescription().setExtras(extras);
+        clipboard.setPrimaryClip(clip);
+        if (!node.performAction(AccessibilityNodeInfo.ACTION_PASTE)) {
+            if (previous != null) clipboard.setPrimaryClip(previous);
+            else clipboard.clearPrimaryClip();
+            return false;
+        }
         handler.postDelayed(() -> {
             if (previous != null) clipboard.setPrimaryClip(previous);
             else clipboard.clearPrimaryClip();
