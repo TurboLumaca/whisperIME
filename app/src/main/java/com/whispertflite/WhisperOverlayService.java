@@ -528,7 +528,8 @@ public class WhisperOverlayService extends AccessibilityService {
                 break;
         }
         statusDot.setBackgroundTintList(ColorStateList.valueOf(ContextCompat.getColor(this, dotColor)));
-        tvText.setHint(R.string.overlay_hint_speak);
+        // "Speak now" only makes sense while recording or waiting, not while the audio is being transcribed
+        tvText.setHint(state == State.TRANSCRIBING ? "" : getString(R.string.overlay_hint_speak));
         if (!TextUtils.equals(tvText.getText(), transcript)) {
             tvText.setText(transcript.toString());
             // Keep the latest text visible
