@@ -82,8 +82,15 @@ public class Whisper {
         return currentModelPath;
     }
 
+    /**
+     * Unloads the model. A running transcription is cancelled first and this waits for it to end,
+     * so the interpreter is never closed while it is in use.
+     */
     public void unloadModel() {
-        mWhisperEngine.deinitialize();
+        stop();
+        synchronized (mWhisperEngine) {  // same lock as processRecordBuffer()
+            mWhisperEngine.deinitialize();
+        }
         currentModelPath = "";
     }
 

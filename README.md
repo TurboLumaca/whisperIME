@@ -59,6 +59,8 @@ A floating microphone button appears when you edit a text field in any app. Tap 
 
 In the panel, the wave button starts and stops recording. You can keep talking while earlier parts are being transcribed: they are transcribed in order and the text is joined. The ✓ button waits for all pending parts, then inserts the text.
 
+Explicit buttons appear when there is something to cancel: "Cancel recording" discards the part being recorded, "Cancel transcription" stops the parts still being transcribed. The text so far is kept in both cases. The ✕ button closes the panel and discards everything. Drag the handle at the top to move the panel; its position is remembered.
+
 Enable it in the app ("Floating mic button"), which opens the Accessibility settings. On Android 13+ you may first have to allow "restricted settings" for the app (App info → ⋮ menu).
 
 Why it is an accessibility service: Android lets apps use the microphone in the background and insert text into other apps only in a few cases. An accessibility service is the only reliable one. It is used only to:

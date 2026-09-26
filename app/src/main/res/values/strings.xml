@@ -56,4 +56,10 @@
     <string name="custom_vocabulary_help">One entry per line.\n• A word or name with at least 5 letters, or an acronym (e.g. Elena, GPT): words that sound alike are corrected to it (Helena → Elena, GPD → GPT). Shorter words only fix upper/lower case.\n• wrong = right (e.g. cloud code = Claude Code): explicit replacement.</string>
     <string name="custom_vocabulary_reset">Reset</string>
     <string name="overlay_transcribing_progress">Transcribing… %1$d/%2$d</string>
+    <string name="overlay_cancel_recording">Cancel recording</string>
+    <string name="overlay_cancel_transcription">Cancel transcription</string>
+    <string name="overlay_close">Close and discard</string>
+    <string name="overlay_move">Drag to move</string>
+    <string name="overlay_recording_discarded">Recording discarded</string>
+    <string name="overlay_transcription_cancelled">Transcription cancelled</string>
 </resources>

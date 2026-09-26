@@ -71,6 +71,8 @@ public class WhisperOverlayService extends AccessibilityService {
     // Time the target app gets to read the temporary clip before the previous clipboard is restored
     private static final long CLIPBOARD_RESTORE_DELAY_MS = 500;
     private static final long RECORDER_RETRY_DELAY_MS = 100;
+    private static final String PREF_PANEL_X = "overlayPanelX";
+    private static final String PREF_PANEL_Y = "overlayPanelY";
 
 
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -85,6 +87,8 @@ public class WhisperOverlayService extends AccessibilityService {
     private View panelRoot;
     private View panelCard;
     private WindowManager.LayoutParams panelParams;
+    private View btnCancelRecording;
+    private View btnCancelTranscription;
     private boolean panelShown = false;
     private TextView tvStatus;
     private TextView tvText;
@@ -164,6 +168,7 @@ public class WhisperOverlayService extends AccessibilityService {
         }
         if (panelShown) {
             panelParams.width = panelWidth();
+            clampPanelPosition();
             windowManager.updateViewLayout(panelRoot, panelParams);
         }
     }
@@ -347,8 +352,10 @@ public class WhisperOverlayService extends AccessibilityService {
                 WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
                 PixelFormat.TRANSLUCENT);
-        panelParams.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
-        panelParams.y = dp(16);
+        // x from the left edge, y from the bottom edge; default: centered near the bottom
+        panelParams.gravity = Gravity.BOTTOM | Gravity.START;
+        panelParams.x = sp.getInt(PREF_PANEL_X, -1);
+        panelParams.y = sp.getInt(PREF_PANEL_Y, dp(16));
 
         panelCard = panelRoot.findViewById(R.id.overlay_card);
         tvStatus = panelRoot.findViewById(R.id.overlay_status);
@@ -358,6 +365,11 @@ public class WhisperOverlayService extends AccessibilityService {
         waveform = panelRoot.findViewById(R.id.overlay_waveform);
 
         panelRoot.findViewById(R.id.overlay_cancel).setOnClickListener(v -> closePanel());
+        btnCancelRecording = panelRoot.findViewById(R.id.overlay_cancel_recording);
+        btnCancelRecording.setOnClickListener(v -> cancelRecording());
+        btnCancelTranscription = panelRoot.findViewById(R.id.overlay_cancel_transcription);
+        btnCancelTranscription.setOnClickListener(v -> cancelTranscription());
+        setupPanelDrag(panelRoot.findViewById(R.id.overlay_drag_handle));
         panelRoot.findViewById(R.id.overlay_wave_button).setOnClickListener(v -> toggleRecording());
         panelRoot.findViewById(R.id.overlay_done).setOnClickListener(v -> finishDictation());
     }
@@ -383,6 +395,8 @@ public class WhisperOverlayService extends AccessibilityService {
         transcript.setLength(0);
         insertWhenDone = false;
         panelParams.width = panelWidth();
+        if (panelParams.x < 0) panelParams.x = (getResources().getDisplayMetrics().widthPixels - panelParams.width) / 2;
+        clampPanelPosition();
         windowManager.addView(panelRoot, panelParams);
         panelShown = true;
 
@@ -415,6 +429,71 @@ public class WhisperOverlayService extends AccessibilityService {
         panelShown = false;
         handler.postDelayed(unloadModel, MODEL_UNLOAD_DELAY_MS);
         scheduleVisibilityCheck();
+    }
+
+    // "Cancel recording": discard what is being recorded now, keep the panel and the text so far
+    private void cancelRecording() {
+        if (!recording) return;
+        recording = false;  // the recorder's MSG_RECORDING_DONE is ignored, its audio is dropped
+        insertWhenDone = false;
+        handler.removeCallbacks(recordingTicker);
+        mRecorder.stop();
+        updateUi();
+        tvStatus.setText(R.string.overlay_recording_discarded);
+    }
+
+    // "Cancel transcription": abort the running transcription and drop the queued recordings,
+    // keep the panel, the text so far and a recording that is still running
+    private void cancelTranscription() {
+        if (!transcribing && transcriptionQueue.isEmpty()) return;
+        if (transcribing && mWhisper != null) mWhisper.stop();
+        session++;  // ignore a result that may still arrive from the aborted transcription
+        transcribing = false;
+        transcriptionQueue.clear();
+        progressChunk = -1;
+        insertWhenDone = false;
+        updateUi();
+        if (!recording) tvStatus.setText(R.string.overlay_transcription_cancelled);
+    }
+
+    // The panel is moved by dragging its handle; the position is remembered
+    @SuppressLint("ClickableViewAccessibility")
+    private void setupPanelDrag(View handle) {
+        handle.setOnTouchListener(new View.OnTouchListener() {
+            private float downRawX, downRawY;
+            private int startX, startY;
+
+            @Override
+            public boolean onTouch(View v, MotionEvent event) {
+                switch (event.getActionMasked()) {
+                    case MotionEvent.ACTION_DOWN:
+                        downRawX = event.getRawX();
+                        downRawY = event.getRawY();
+                        startX = panelParams.x;
+                        startY = panelParams.y;
+                        return true;
+                    case MotionEvent.ACTION_MOVE:
+                        if (!panelShown) return true;
+                        panelParams.x = startX + (int) (event.getRawX() - downRawX);
+                        panelParams.y = startY - (int) (event.getRawY() - downRawY);  // y is measured from the bottom
+                        clampPanelPosition();
+                        windowManager.updateViewLayout(panelRoot, panelParams);
+                        return true;
+                    case MotionEvent.ACTION_UP:
+                    case MotionEvent.ACTION_CANCEL:
+                        sp.edit().putInt(PREF_PANEL_X, panelParams.x).putInt(PREF_PANEL_Y, panelParams.y).apply();
+                        return true;
+                }
+                return false;
+            }
+        });
+    }
+
+    private void clampPanelPosition() {
+        DisplayMetrics dm = getResources().getDisplayMetrics();
+        int height = panelRoot.getHeight() > 0 ? panelRoot.getHeight() : dp(320);
+        panelParams.x = Math.max(0, Math.min(panelParams.x, dm.widthPixels - panelParams.width));
+        panelParams.y = Math.max(0, Math.min(panelParams.y, dm.heightPixels - height));
     }
 
     // Wave button: start/stop recording, also while earlier recordings are still being transcribed
@@ -562,6 +641,9 @@ public class WhisperOverlayService extends AccessibilityService {
             waveform.setMode(WaveformView.Mode.IDLE);
         }
         statusDot.setBackgroundTintList(ColorStateList.valueOf(ContextCompat.getColor(this, dotColor)));
+        // INVISIBLE, not GONE: the layout must not move under the user's finger when a button appears
+        btnCancelRecording.setVisibility(recording ? View.VISIBLE : View.INVISIBLE);
+        btnCancelTranscription.setVisibility(busy ? View.VISIBLE : View.INVISIBLE);
         // "Speak now" only makes sense while recording or waiting, not while only transcribing
         tvText.setHint(busy && !recording ? "" : getString(R.string.overlay_hint_speak));
         if (!TextUtils.equals(tvText.getText(), transcript)) {

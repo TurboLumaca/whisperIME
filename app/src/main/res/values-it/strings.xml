@@ -55,4 +55,10 @@
     <string name="custom_vocabulary_help">Una voce per riga.\n• Una parola o un nome di almeno 5 lettere, o una sigla (es. Elena, GPT): le parole simili nel suono vengono corrette (Helena → Elena, GPD → GPT). Le parole più corte correggono solo maiuscole/minuscole.\n• sbagliato = giusto (es. cloud code = Claude Code): sostituzione esplicita.</string>
     <string name="custom_vocabulary_reset">Ripristina</string>
     <string name="overlay_transcribing_progress">Trascrizione… %1$d/%2$d</string>
+    <string name="overlay_cancel_recording">Annulla registrazione</string>
+    <string name="overlay_cancel_transcription">Annulla trascrizione</string>
+    <string name="overlay_close">Chiudi e scarta</string>
+    <string name="overlay_move">Trascina per spostare</string>
+    <string name="overlay_recording_discarded">Registrazione scartata</string>
+    <string name="overlay_transcription_cancelled">Trascrizione annullata</string>
 </resources>
