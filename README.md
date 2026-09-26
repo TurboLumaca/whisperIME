@@ -55,27 +55,60 @@ By following these guidelines, you'll be able to enjoy accurate and efficient vo
 
 ## Floating microphone
 
-A floating microphone button appears when you edit a text field in any app. Tap it to dictate and insert the text into that field without switching keyboards. You can drag the button to either edge of the screen.
+A floating microphone button appears when you edit a text field in any app. Tap it to dictate and insert the text into that field, without switching keyboards. You can drag the button to either edge of the screen.
 
-In the panel, the wave button starts and stops recording. You can keep talking while earlier parts are being transcribed: they are transcribed in order and the text is joined. The ✓ button waits for all pending parts, then inserts the text.
+### Setup
 
-Explicit buttons appear when there is something to cancel: "Cancel recording" discards the part being recorded, "Cancel transcription" stops the parts still being transcribed. The text so far is kept in both cases. The ✕ button closes the panel and discards everything. Drag the handle at the top to move the panel; its position is remembered.
+1. Open Whisper and tap "Floating mic button". This opens the Accessibility settings.
+2. Enable "Whisper floating mic".
 
-Enable it in the app ("Floating mic button"), which opens the Accessibility settings. On Android 13+ you may first have to allow "restricted settings" for the app (App info → ⋮ menu).
+On Android 13+ you may first have to allow "restricted settings" for the app (App info → ⋮ menu → "Allow restricted settings"). This is needed for apps that were not installed from an app store.
 
-Why it is an accessibility service: Android lets apps use the microphone in the background and insert text into other apps only in a few cases. An accessibility service is the only reliable one. It is used only to:
+### The dictation panel
+
+| Control | What it does |
+|---|---|
+| Wave button | Starts and stops recording. You can keep talking while earlier parts are still being transcribed: the parts are transcribed in order and the text is joined |
+| ✓ | Stops recording if needed, waits for all pending parts, inserts the text and closes the panel |
+| Cancel recording | Discards the part that is being recorded. Only shown while recording |
+| Cancel transcription | Stops the running and the queued transcriptions. Only shown while transcribing |
+| ✕ | Closes the panel and discards everything |
+| Handle (top) | Drag to move the panel, the position is remembered |
+
+"Cancel recording" and "Cancel transcription" keep the text that has already been transcribed.
+
+### Privacy and permissions
+
+Android lets apps use the microphone in the background and insert text into other apps only in a few cases. An accessibility service is the only reliable one. It is used only to:
 - find out whether a text field has focus, so the button can be shown,
 - insert the transcription into the focused field.
 
-It does not read or store screen content. Audio is processed on the device and never leaves it. The button is hidden in password fields, and dictated text is never placed in the clipboard for them.
+It does not read or store screen content. Audio is processed on the device and never leaves it.
+
+- The button is hidden in password fields and nothing is inserted there.
+- If an app does not accept the text directly, it is pasted through the clipboard. Your previous clipboard content is restored right after.
+- If there is no text field to insert into, the text is left in the clipboard.
 
 ## Custom words
 
-Whisper models sometimes misspell names and technical terms (e.g. "Helena" instead of "Elena", "cloud code" instead of "Claude Code"). Under "Custom words…" you can add one entry per line:
-- `Elena`: words that sound alike are corrected to it. This applies to entries with at least 5 letters and to acronyms like `GPT`. Shorter entries only fix upper/lower case.
-- `cloud code = Claude Code`: explicit replacement.
+Whisper models sometimes misspell names and technical terms (e.g. "Helena" instead of "Elena", "cloud code" instead of "Claude Code"). The models cannot be given a word list, so the text is corrected after transcription. Under "Custom words…" you can add one entry per line:
+
+| Entry | Effect |
+|---|---|
+| `Elena` | Words that sound alike are corrected to it (Helena → Elena). Case, accents, silent "h", d/t, b/p and doubled letters are ignored when comparing |
+| `GPT` | Acronyms (all capitals) are matched the same way (GPD → GPT) |
+| `cloud code = Claude Code` | Explicit replacement, for words that do not sound alike |
+| `# note` | Lines starting with `#` are ignored |
+
+Sound-alike matching is only used for entries with at least 5 letters, and for acronyms. Shorter entries only fix upper/lower case, so a name like "Ugo" cannot change unrelated words. Longer phrases win over shorter ones (`Claude Code` before `Claude`).
 
 The corrections apply to the floating microphone, the keyboard, the app and the system voice input.
+
+## Development
+
+Debug builds use the application id `org.woheller69.whisper.dev`, so they can be installed next to the release app. Unit tests: `./gradlew :app:testDebugUnitTest`.
+
+Known limitation: the native library of TensorFlow Lite 2.15 is not aligned to 16 kB pages. Newer, aligned LiteRT versions were measured to be about 5x slower for inference, so the app stays on TensorFlow Lite 2.15 for now.
 
 [<img src="https://fdroid.gitlab.io/artwork/badge/get-it-on.png" height="75">](https://f-droid.org/de/packages/org.woheller69.whisper/) [<img src="https://www.openapk.net/images/openapk-badge.png" height="75">]( https://www.openapk.net/whisper/org.woheller69.whisper/)
 
