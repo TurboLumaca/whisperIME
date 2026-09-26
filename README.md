@@ -57,6 +57,8 @@ By following these guidelines, you'll be able to enjoy accurate and efficient vo
 
 A floating microphone button appears when you edit a text field in any app. Tap it to dictate and insert the text into that field without switching keyboards. You can drag the button to either edge of the screen.
 
+In the panel, the wave button starts and stops recording. You can keep talking while earlier parts are being transcribed: they are transcribed in order and the text is joined. The ✓ button waits for all pending parts, then inserts the text.
+
 Enable it in the app ("Floating mic button"), which opens the Accessibility settings. On Android 13+ you may first have to allow "restricted settings" for the app (App info → ⋮ menu).
 
 Why it is an accessibility service: Android lets apps use the microphone in the background and insert text into other apps only in a few cases. An accessibility service is the only reliable one. It is used only to:

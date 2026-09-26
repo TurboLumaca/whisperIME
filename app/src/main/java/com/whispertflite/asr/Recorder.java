@@ -75,11 +75,12 @@ public class Recorder {
     }
 
 
-    public void start() {
+    /** Starts recording; returns false if the previous recording is still being finished. */
+    public boolean start() {
         // Refuse while a previous recording is still being finished by the worker thread
         if (!mBusy.compareAndSet(false, true)) {
             Log.d(TAG, "Recording is already in progress...");
-            return;
+            return false;
         }
         mInProgress.set(true);
         lock.lock();
@@ -90,6 +91,7 @@ public class Recorder {
         } finally {
             lock.unlock();
         }
+        return true;
     }
 
     public void initVad(){

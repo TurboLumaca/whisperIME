@@ -49,6 +49,7 @@ import com.whispertflite.utils.HapticFeedback;
 import com.whispertflite.utils.InputLang;
 
 import java.io.File;
+import java.util.ArrayDeque;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
@@ -69,8 +70,8 @@ public class WhisperOverlayService extends AccessibilityService {
     private static final String PREF_BUBBLE_Y = "overlayBubbleY";
     // Time the target app gets to read the temporary clip before the previous clipboard is restored
     private static final long CLIPBOARD_RESTORE_DELAY_MS = 500;
+    private static final long RECORDER_RETRY_DELAY_MS = 100;
 
-    private enum State { IDLE, RECORDING, TRANSCRIBING }
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final ExecutorService modelExecutor = Executors.newSingleThreadExecutor();
@@ -94,9 +95,14 @@ public class WhisperOverlayService extends AccessibilityService {
     private Whisper mWhisper;
     private boolean modelReady = false;
     private boolean modelLoading = false;
-    private boolean transcriptionPending = false;
 
-    private State state = State.IDLE;
+    // Recording and transcription run independently: the user can keep talking while earlier
+    // recordings are transcribed. Finished recordings wait in a queue and are transcribed in order.
+    private boolean recording = false;
+    private boolean transcribing = false;  // one queued recording is being processed by Whisper
+    private final ArrayDeque<byte[]> transcriptionQueue = new ArrayDeque<>();
+    private int progressChunk = -1;        // chunk progress of the running transcription, -1 = none
+    private int progressTotal = 0;
     private boolean insertWhenDone = false;
     private int session = 0;               // incremented whenever the panel closes, stale results are ignored
     private int transcriptionSession = -1;
@@ -108,7 +114,7 @@ public class WhisperOverlayService extends AccessibilityService {
     private final Runnable recordingTicker = new Runnable() {
         @Override
         public void run() {
-            if (state != State.RECORDING) return;
+            if (!recording) return;
             updateUi();
             handler.postDelayed(this, 500);
         }
@@ -392,16 +398,18 @@ public class WhisperOverlayService extends AccessibilityService {
 
     private void closePanel() {
         if (!panelShown) return;
-        if (state == State.RECORDING) {
-            state = State.IDLE;
+        if (recording) {
+            recording = false;
             mRecorder.stop();
-        } else if (state == State.TRANSCRIBING && mWhisper != null) {
+        }
+        if (transcribing && mWhisper != null) {
             mWhisper.stop();  // abort the inference instead of letting it run for nothing
         }
         session++;
-        state = State.IDLE;
+        transcribing = false;
+        transcriptionQueue.clear();
+        progressChunk = -1;
         insertWhenDone = false;
-        transcriptionPending = false;
         handler.removeCallbacks(recordingTicker);
         windowManager.removeView(panelRoot);
         panelShown = false;
@@ -409,20 +417,22 @@ public class WhisperOverlayService extends AccessibilityService {
         scheduleVisibilityCheck();
     }
 
+    // Wave button: start/stop recording, also while earlier recordings are still being transcribed
     private void toggleRecording() {
-        if (state == State.RECORDING) mRecorder.stop();
-        else if (state == State.IDLE) startRecording();
+        if (recording) mRecorder.stop();
+        else startRecording();
     }
 
-    // Check button: stop recording if needed, wait for the transcription, then insert and close
+    // Check button: stop recording if needed, wait for all transcriptions, then insert and close
     private void finishDictation() {
-        if (state == State.RECORDING) {
+        if (recording) {
             insertWhenDone = true;
             mRecorder.stop();
             return;
         }
-        if (state == State.TRANSCRIBING) {
+        if (transcribing || !transcriptionQueue.isEmpty()) {
             insertWhenDone = true;
+            updateUi();
             return;
         }
         String text = transcript.toString().trim();
@@ -431,11 +441,17 @@ public class WhisperOverlayService extends AccessibilityService {
     }
 
     private void startRecording() {
-        if (mRecorder.isInProgress()) return;
-        state = State.RECORDING;
+        if (recording || insertWhenDone) return;
+        if (!mRecorder.start()) {
+            // The previous recording is still being finished by the recorder thread, retry shortly
+            handler.postDelayed(() -> {
+                if (panelShown) startRecording();
+            }, RECORDER_RETRY_DELAY_MS);
+            return;
+        }
+        recording = true;
         recordingStartedAt = SystemClock.elapsedRealtime();
         HapticFeedback.vibrate(this);
-        mRecorder.start();
         updateUi();
         handler.removeCallbacks(recordingTicker);
         handler.post(recordingTicker);
@@ -443,44 +459,49 @@ public class WhisperOverlayService extends AccessibilityService {
 
     private void onRecorderUpdate(String message) {
         if (message.equals(Recorder.MSG_RECORDING)) return;
-        if (state != State.RECORDING) return;  // cancelled
+        if (!recording) return;  // cancelled
+        recording = false;
         handler.removeCallbacks(recordingTicker);
         if (message.equals(Recorder.MSG_RECORDING_DONE)) {
             HapticFeedback.vibrate(this);
-            state = State.TRANSCRIBING;
-            transcriptionSession = session;
-            if (modelReady) startTranscription();
-            else transcriptionPending = true;
+            // Take the audio now: a new recording may start before this one is transcribed
+            transcriptionQueue.add(mRecorder.getRecordedAudio());
+            transcribeNext();
             updateUi();
         } else {
             // MSG_RECORDING_ERROR (too short) or an error text
-            state = State.IDLE;
             if (insertWhenDone) {
                 finishDictation();
                 return;
             }
             updateUi();
-            tvStatus.setText(message.equals(Recorder.MSG_RECORDING_ERROR) ? getString(R.string.error_no_input) : message);
+            if (!transcribing) {
+                tvStatus.setText(message.equals(Recorder.MSG_RECORDING_ERROR) ? getString(R.string.error_no_input) : message);
+            }
         }
     }
 
-    private void startTranscription() {
-        transcriptionPending = false;
-        if (state != State.TRANSCRIBING || transcriptionSession != session) return;
+    // Starts the transcription of the oldest queued recording, if Whisper is free and the model is loaded
+    private void transcribeNext() {
+        if (transcribing || transcriptionQueue.isEmpty() || !modelReady || !panelShown) return;
         if (mWhisper.isInProgress()) {
             // A cancelled transcription is still running, wait for it
-            handler.postDelayed(this::startTranscription, 200);
+            handler.postDelayed(this::transcribeNext, 200);
             return;
         }
+        transcribing = true;
+        transcriptionSession = session;
+        progressChunk = -1;
         mWhisper.setAction(Whisper.ACTION_TRANSCRIBE);
         String langCode = sp.getString("language", "auto");
         mWhisper.setLanguage(InputLang.getIdForLanguage(InputLang.getLangList(), langCode));
-        mWhisper.start(mRecorder.getRecordedAudio());
+        mWhisper.start(transcriptionQueue.poll());
     }
 
     private void onTranscriptionResult(WhisperResult whisperResult) {
-        if (transcriptionSession != session || state != State.TRANSCRIBING) return;
-        state = State.IDLE;
+        if (transcriptionSession != session || !transcribing) return;
+        transcribing = false;
+        progressChunk = -1;
         String result = whisperResult.getResult();
         if ("zh".equals(whisperResult.getLanguage())) {
             boolean simpleChinese = sp.getBoolean("simpleChinese", false);
@@ -491,7 +512,8 @@ public class WhisperOverlayService extends AccessibilityService {
             if (transcript.length() > 0) transcript.append(' ');
             transcript.append(result);
         }
-        if (insertWhenDone) {
+        transcribeNext();
+        if (insertWhenDone && !recording && !transcribing && transcriptionQueue.isEmpty()) {
             finishDictation();
             return;
         }
@@ -499,37 +521,49 @@ public class WhisperOverlayService extends AccessibilityService {
     }
 
     private void onTranscriptionFailed(String message) {
-        if (transcriptionSession != session || state != State.TRANSCRIBING) return;
-        state = State.IDLE;
-        insertWhenDone = false;
+        if (transcriptionSession != session || !transcribing) return;
+        transcribing = false;
+        progressChunk = -1;
+        transcribeNext();  // keep going with the other recordings
+        if (insertWhenDone && !recording && !transcribing && transcriptionQueue.isEmpty()) {
+            finishDictation();
+            return;
+        }
         updateUi();
-        tvStatus.setText(message);
+        if (!recording) tvStatus.setText(message);
     }
 
     private void updateUi() {
+        boolean busy = transcribing || !transcriptionQueue.isEmpty();
+        String transcribingText;
+        if (!modelReady) {
+            transcribingText = getString(R.string.overlay_loading_model);
+        } else if (progressChunk >= 0 && progressTotal > 1) {
+            transcribingText = getString(R.string.overlay_transcribing_progress, progressChunk + 1, progressTotal);
+        } else {
+            transcribingText = getString(R.string.overlay_transcribing);
+        }
+
         int dotColor;
-        switch (state) {
-            case RECORDING:
-                long elapsed = (SystemClock.elapsedRealtime() - recordingStartedAt) / 1000;
-                tvStatus.setText(getString(R.string.overlay_listening,
-                        String.format(Locale.ROOT, "%d:%02d", elapsed / 60, elapsed % 60)));
-                dotColor = R.color.overlayRecording;
-                waveform.setMode(WaveformView.Mode.RECORDING);
-                break;
-            case TRANSCRIBING:
-                tvStatus.setText(modelReady ? R.string.overlay_transcribing : R.string.overlay_loading_model);
-                dotColor = R.color.overlayLilac;
-                waveform.setMode(WaveformView.Mode.PROCESSING);
-                break;
-            default:
-                tvStatus.setText(R.string.overlay_ready);
-                dotColor = R.color.overlayCreamDim;
-                waveform.setMode(WaveformView.Mode.IDLE);
-                break;
+        if (recording) {
+            long elapsed = (SystemClock.elapsedRealtime() - recordingStartedAt) / 1000;
+            String listening = getString(R.string.overlay_listening,
+                    String.format(Locale.ROOT, "%d:%02d", elapsed / 60, elapsed % 60));
+            tvStatus.setText(busy ? listening + "  ·  " + transcribingText : listening);
+            dotColor = R.color.overlayRecording;
+            waveform.setMode(WaveformView.Mode.RECORDING);
+        } else if (busy) {
+            tvStatus.setText(transcribingText);
+            dotColor = R.color.overlayLilac;
+            waveform.setMode(WaveformView.Mode.PROCESSING);
+        } else {
+            tvStatus.setText(R.string.overlay_ready);
+            dotColor = R.color.overlayCreamDim;
+            waveform.setMode(WaveformView.Mode.IDLE);
         }
         statusDot.setBackgroundTintList(ColorStateList.valueOf(ContextCompat.getColor(this, dotColor)));
-        // "Speak now" only makes sense while recording or waiting, not while the audio is being transcribed
-        tvText.setHint(state == State.TRANSCRIBING ? "" : getString(R.string.overlay_hint_speak));
+        // "Speak now" only makes sense while recording or waiting, not while only transcribing
+        tvText.setHint(busy && !recording ? "" : getString(R.string.overlay_hint_speak));
         if (!TextUtils.equals(tvText.getText(), transcript)) {
             tvText.setText(transcript.toString());
             // Keep the latest text visible
@@ -631,9 +665,10 @@ public class WhisperOverlayService extends AccessibilityService {
                 @Override
                 public void onProgress(int chunk, int total) {
                     handler.post(() -> {
-                        if (state == State.TRANSCRIBING && total > 1) {
-                            tvStatus.setText(getString(R.string.overlay_transcribing_progress, chunk + 1, total));
-                        }
+                        if (!transcribing || !panelShown) return;
+                        progressChunk = chunk;
+                        progressTotal = total;
+                        updateUi();
                     });
                 }
             });
@@ -654,7 +689,7 @@ public class WhisperOverlayService extends AccessibilityService {
                 modelLoading = false;
                 modelReady = true;
                 if (panelShown) updateUi();
-                if (transcriptionPending) startTranscription();
+                transcribeNext();
             });
         });
     }
