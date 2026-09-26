@@ -665,6 +665,13 @@ public class WhisperOverlayService extends AccessibilityService {
         if (node != null && node.isPassword()) return;  // never put dictated text into password fields or the clipboard
         if (node != null) {
             CharSequence current = fieldText(node);
+            if (BuildConfig.DEBUG) {
+                CharSequence raw = node.getText();
+                Log.d(TAG, "insert: pkg=" + node.getPackageName() + " class=" + node.getClassName()
+                        + " rawLen=" + (raw == null ? -1 : raw.length()) + " usedLen=" + current.length()
+                        + " showingHint=" + node.isShowingHintText() + " hasHint=" + (node.getHintText() != null)
+                        + " sel=" + node.getTextSelectionStart() + "," + node.getTextSelectionEnd());
+            }
             int len = current.length();
             int start = node.getTextSelectionStart();
             int end = node.getTextSelectionEnd();
@@ -702,10 +709,14 @@ public class WhisperOverlayService extends AccessibilityService {
         Toast.makeText(this, R.string.overlay_copied, Toast.LENGTH_LONG).show();
     }
 
-    // Text of an editable node, "" while it only shows its hint
+    // Text of an editable node, "" while it only shows its hint. Many apps (WhatsApp, Telegram, ...) expose the
+    // hint ("Message") as the node text without setting isShowingHintText(), so compare with the hint too.
     private static CharSequence fieldText(AccessibilityNodeInfo node) {
         CharSequence text = node.getText();
-        return text == null || node.isShowingHintText() ? "" : text;
+        if (text == null || node.isShowingHintText()) return "";
+        CharSequence hint = node.getHintText();
+        if (hint != null && text.toString().trim().equals(hint.toString().trim())) return "";
+        return text;
     }
 
     // Pastes via a temporary clip, then restores the user's previous clipboard content
