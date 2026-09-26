@@ -47,7 +47,9 @@ public class WhisperEngineJava implements WhisperEngine {
     @Override
     public void initialize(String modelPath, String vocabPath, boolean multilingual) throws IOException {
         // Load model
+        long t0 = System.currentTimeMillis();
         loadModel(modelPath);
+        Log.d(TAG, "Model load took " + (System.currentTimeMillis() - t0) + "ms");
         Log.d(TAG, "Model is loaded..." + modelPath);
 
         // Load filters and vocab
@@ -88,12 +90,14 @@ public class WhisperEngineJava implements WhisperEngine {
             Log.d(TAG, "Processing chunk " + start + " - " + end + " of " + samples.length);
 
             // Calculate Mel spectrogram
+            long t0 = System.currentTimeMillis();
             float[] melSpectrogram = getMelSpectrogram(samples, start, end - start);
-            Log.d(TAG, "Mel spectrogram is calculated...!");
+            long t1 = System.currentTimeMillis();
+            Log.d(TAG, "Mel spectrogram is calculated...! " + (t1 - t0) + "ms");
 
             // Perform inference
             WhisperResult chunkResult = runInference(melSpectrogram, mAction, mLangToken);
-            Log.d(TAG, "Inference is executed...!");
+            Log.d(TAG, "Inference is executed...! " + (System.currentTimeMillis() - t1) + "ms");
 
             if (start == 0 && end == samples.length) return chunkResult;  // single chunk: unchanged behaviour
 
